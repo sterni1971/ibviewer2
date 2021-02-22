@@ -1,0 +1,429 @@
+#!/usr/bin/python3
+
+"""
+Script to convert ibnetdiscover output to json file
+parts from https://github.com/kostty/ibtopo/blob/master/ibtopology
+script to view the desy maxwell fabric json dump
+"""
+
+import sys
+import os.path
+import argparse
+import subprocess
+import json
+
+
+#### Host functions
+
+
+def get_host_list(fabric_data, search_id="", search_name=""):
+    """get all hosts or search for the id or name"""
+    hn_dict = {}
+    for s_id in fabric_data:
+        s_name = get_rack_location(fabric_data[s_id]['name'])[0]
+        s_hosts = get_host_links(fabric_data, s_id)[0]
+
+        for h_name in s_hosts:
+            if search_name or search_id:
+                id_search_list = s_hosts[h_name][0].split(';')
+                if search_name == h_name or search_id in id_search_list:
+                    hn_dict[h_name] = [s_name,
+                                       s_hosts[h_name][2],
+                                       s_hosts[h_name][0],
+                                       s_hosts[h_name][1],
+                                       s_hosts[h_name][3]]
+                    break
+
+            else:
+                hn_dict[h_name] = [s_name, s_hosts[h_name][2], s_hosts[h_name][0]]
+
+    return hn_dict
+
+
+def show_host(fabric_data, host_id, host_name):
+    """show host details in fabric"""
+
+    hn_dict = get_host_list(fabric_data, host_id, host_name)
+
+    for h_name in hn_dict:
+        guid_list = hn_dict[h_name][2].split(';')
+        lid_list = hn_dict[h_name][4].split(';')
+
+        print("{0:10} {1}".format("Name:", h_name))
+
+        for cnt, guid, lid in zip(range(len(guid_list)), guid_list, lid_list):
+            print("GUID[{0}]:   {1}".format(cnt, guid))
+            print("LID[{0}]:    {1}".format(cnt, lid))
+
+        print("{0:10} {1}".format("Switch:", hn_dict[h_name][0]))
+        print("{0:10} {1}".format("Connect:", hn_dict[h_name][1]))
+        print("{0:10} {1}".format("Links:", hn_dict[h_name][3]))
+
+
+def list_hosts(fabric_data, no_header):
+    """list all hosts in the fabric"""
+
+    if not no_header:
+        print("{0:25}{1:14}{2:10}{3:20}".format("Name", "Switch", "Connect", "GUID"))
+        print("----------------------------------------------------------------------")
+
+    hn_dict = get_host_list(fabric_data)
+
+    for h_id in sorted(hn_dict):
+        print("{0:25}{1:14}{2:10}{3:20}".format(h_id,
+                                                hn_dict[h_id][0],
+                                                hn_dict[h_id][1],
+                                                hn_dict[h_id][2]))
+
+
+def get_host_links(fabric_data, s_id):
+    """get linked hosts, used ports and connection type"""
+    h_links = {}
+    h_ports = 0
+
+    linked_hosts = fabric_data[s_id]['hosts']
+    for l_host in linked_hosts:
+        h_name = linked_hosts[l_host]['name']
+
+        if h_name in h_links:
+            h_links[h_name][1] += linked_hosts[l_host]['links']
+            h_links[h_name][0] += ";{}".format(l_host)
+            h_links[h_name][3] += ";{}".format(linked_hosts[l_host]['lid'])
+
+        else:
+            h_links[h_name] = [l_host,
+                               linked_hosts[l_host]['links'],
+                               linked_hosts[l_host]['connect'],
+                               linked_hosts[l_host]['lid']]
+
+        h_ports += linked_hosts[l_host]['links']
+
+    return h_links, h_ports
+
+
+#### Switch functions
+
+
+def list_switches(fabric_data, no_header):
+    """list all switches in the fabric"""
+    if not no_header:
+        print("{0:15}{1:20}{2:13}{3}".format("Name",
+                                             "GUID",
+                                             "Location",
+                                             "Ports(All/Used/Blocked/Free)"))
+        print("----------------------------------------------------------------------")
+
+    for s_id in sorted(fabric_data, key=lambda fd: (fabric_data[fd]['name'])):
+        (s_name, s_location, s_ru) = fabric_data[s_id]['name'].split()
+        s_ports = fabric_data[s_id]['ports']
+        s_blocked_ports = fabric_data[s_id]['blocked_ports']
+        s_linkports = get_switch_links(fabric_data, s_id)[1]
+        s_hostports = get_host_links(fabric_data, s_id)[1]
+        print("{0:15}{1:20}{2:7}/{3:5}{4:2} {5:2} {6:2} {7:2}".format(s_name,
+                                                                      s_id,
+                                                                      s_location,
+                                                                      s_ru,
+                                                                      s_ports,
+                                                                      s_linkports+s_hostports,
+                                                                      s_blocked_ports,
+                                                                      s_ports-(s_linkports
+                                                                               +s_hostports
+                                                                               +s_blocked_ports)))
+
+
+def get_switch_links(fabric_data, s_id):
+    """get linked switches, used ports and connection type"""
+    s_links = {}
+    s_ports = 0
+
+    linked_switches = fabric_data[s_id]['switches']
+    for l_switch in linked_switches:
+        s_name = fabric_data[l_switch]['name'].split()[0]
+        s_links[s_name] = [linked_switches[l_switch]['links'],
+                           linked_switches[l_switch]['connect']]
+        s_ports += linked_switches[l_switch]['links']
+
+    return s_links, s_ports
+
+
+def show_switch(fabric_data, switch_id, switch_name, show_l_switches, show_l_hosts):
+    """print switch details"""
+
+    for s_id in fabric_data:
+        (s_name, s_location, s_ru) = get_rack_location(fabric_data[s_id]['name'])
+        if s_name == switch_name or s_id == switch_id:
+            (s_links, s_linkports) = get_switch_links(fabric_data, s_id)
+            (s_hosts, s_hostports) = get_host_links(fabric_data, s_id)
+
+            print("Name: {}".format(s_name))
+            print("GUID: {}".format(s_id))
+            print("Location: {}/{}".format(s_location, s_ru))
+            print("LID: {}".format(fabric_data[s_id]['lid']))
+            print("Ports: {}".format(fabric_data[s_id]['ports']))
+            print("Used_Ports: {}".format(s_linkports+s_hostports))
+            print("Blocked_Ports: {}".format(fabric_data[s_id]['blocked_ports']))
+            print("Free_Ports: {}".
+                  format(fabric_data[s_id]['ports']-(s_linkports
+                                                     +s_hostports
+                                                     +fabric_data[s_id]['blocked_ports'])))
+            if show_l_switches:
+                for l_id in sorted(s_links):
+                    print("Linked_Switch: {} (Links: {} / Connect: {})".
+                          format(l_id, s_links[l_id][0], s_links[l_id][1]))
+            if show_l_hosts:
+                for h_id in sorted(s_hosts):
+                    print("Linked_Host: {} (Links: {} / Connect: {})".
+                          format(h_id, s_hosts[h_id][1], s_hosts[h_id][2]))
+
+
+#### Input / Output
+
+
+def control_pc(ports):
+    """
+    adjust port count. remove virtual ports
+    set split_port flag
+    """
+
+    # 81 and 37 are not the real ports. have to be corrected
+    split_port = False
+    if ports == 81:
+        ports -= 1
+        split_port = True
+    elif ports == 41:
+        ports -= 1
+    elif ports == 37:
+        ports -= 1
+
+    return(split_port, ports)
+
+
+def get_rack_location(switch_name):
+    """get name, location and ru from switch_id"""
+    id_field_list = switch_name.split()
+    if len(id_field_list) == 1:
+        (name, location, rack_unit) = (id_field_list[0], "unknown", "unknown")
+    elif len(id_field_list) == 2:
+        (name, location, rack_unit) = (id_field_list[0], id_field_list[1], "unknown")
+    elif len(id_field_list) == 3:
+        (name, location, rack_unit) = id_field_list
+
+    return (name, location, rack_unit)
+
+
+def get_topo(cmd_path, cmd_args):
+    """read output from ibnetdiscover from command"""
+
+    if cmd_path:
+        topo_cmd[0] = cmd_path
+
+    if cmd_args:
+        topo_cmd.append(cmd_args)
+
+    cmd_str = ' '.join(topo_cmd)
+    try:
+        topo_file = subprocess.check_output(topo_cmd,
+                                            stderr=subprocess.STDOUT,
+                                            encoding='UTF-8')
+    except OSError as error:
+        if error.errno == 2:
+            print(('Error: `{}` couldn\'t be found'.format(topo_cmd[0])))
+            sys.exit(3)
+    except subprocess.CalledProcessError as error:
+        print(('`{}` exited with rc={}\n'.format(cmd_str, error.returncode)))
+        print(('The error message was as follows:\n\n {}'.format(error.output)))
+        sys.exit(4)
+
+    return topo_file
+
+
+def parse_ibnet_output(topo_file):
+    '''Parse ibnet output into dict'''
+
+    switches = {}
+    in_switch = False
+
+    topo_file = topo_file.split('\n')
+    for line in topo_file:
+        line = line.rstrip()
+        line = line.replace('\t', ' ')
+        if line.startswith('Switch'):
+            parts = line.split('"', 4)
+            guid, name = parts[1], parts[3]
+            lid = parts[4].split()[4]
+
+            (split_port, ports) = control_pc(int(parts[0].split()[1]))
+
+            switches[guid] = {
+                'name': name,
+                'lid': lid,
+                'ports': ports,
+                'blocked_ports': 0,
+                'hosts': {},
+                'switches': {},
+                }
+            in_switch = guid
+
+        elif line.startswith('['):
+            if not in_switch:
+                continue
+            switch = switches[in_switch]
+            parts = line.split('"', 4)
+            guid = parts[1]
+            name = parts[3]
+            (lid, connect) = parts[4].split()[1:]
+
+            # on hdr switches with split config a 4xHDR use 2 logical ports
+            if split_port and parts[4].find('4x') > -1:
+                switch['blocked_ports'] += 1
+
+            if guid.startswith('H-'):
+                name = name.split(' ')
+                hca, name = name[1], name[0]
+
+                if guid in switch['hosts']:
+                    switch['hosts'][guid]['links'] += 1
+                else:
+                    switch['hosts'][guid] = {
+                        'links': 1,
+                        'lid': lid,
+                        'name': name,
+                        'hca': hca,
+                        'connect': connect,
+                        }
+            elif guid.startswith('S-'):
+                if guid in switch['switches']:
+                    switch['switches'][guid]['links'] += 1
+                else:
+                    switch['switches'][guid] = {'links': 1}
+                    switch['switches'][guid]['connect'] = connect
+        elif line == "":
+            in_switch = False
+
+    return switches
+
+
+def json_dump(fabric_data, output_file):
+    '''Write dict to json dump'''
+
+    if output_file:
+        with open(output_file, 'w') as outfile:
+            json.dump(fabric_data, outfile, indent=4)
+            outfile.write('\n')
+
+    else:
+        json.dump(fabric_data, sys.stdout, indent=4)
+        print()
+
+
+#### Main
+
+
+def main():
+    """main func"""
+
+    #get fabric data either from file or ibnetdiscover
+    if args.json_import:
+
+        try:
+            with open(args.json_import) as json_file:
+                fabric_data = json.load(json_file)
+        except (IOError, FileNotFoundError) as error:
+            print(('Error: {}: "{}"'.format(error.strerror, args.json)))
+            sys.exit(2)
+
+    else:
+
+        if args.ibnetdiscover_input:
+            try:
+                with open(args.ibnetdiscover_input) as input_file:
+                    topo_file = input_file.read()
+
+            except IOError as error:
+                print(('Error: {}: "{}"'.format(error.strerror, input_file)))
+                sys.exit(2)
+
+        else:
+
+            topo_file = get_topo(args.cmd_path, args.cmd_args)
+
+        fabric_data = parse_ibnet_output(topo_file)
+
+
+    if args.command == 'listswitches':
+        list_switches(fabric_data, args.no_header)
+
+    elif args.command == 'listhosts':
+        list_hosts(fabric_data, args.no_header)
+
+    elif args.command == 'host':
+        show_host(fabric_data, args.id, args.name)
+
+    elif args.command == 'switch':
+        show_switch(fabric_data, args.id, args.name, args.linked_switches, args.linked_hosts)
+
+    elif args.command == 'json-dump':
+        json_dump(fabric_data, args.json_export)
+
+
+if __name__ == '__main__':
+    script_name = os.path.basename(__file__)
+
+    topo_cmd = ['/usr/sbin/ibnetdiscover',]
+
+    parser = argparse.ArgumentParser(prog='ibviewer2',
+                                     usage='%(prog)s [options] command',
+                                     description='IB Fabric viewer!')
+
+    parser.add_argument("command",
+                        choices=['listswitches', 'listhosts', 'switch', 'host',
+                                 'json-dump'],
+                        type=str,
+                        help="Command to execute")
+    parser.add_argument("--id",
+                        default=None,
+                        type=str,
+                        help="IB identifier")
+    parser.add_argument("--name",
+                        default=None,
+                        type=str,
+                        help="IB name")
+    parser.add_argument("--linked-switches",
+                        default=None,
+                        action='store_true',
+                        help="show linked switches")
+    parser.add_argument("--linked-hosts",
+                        default=None,
+                        action='store_true',
+                        help="show linked hosts")
+    parser.add_argument('--ibnetdiscover-input',
+                        metavar='PATH',
+                        type=str,
+                        help='A file containing the output of `ibnetdiscover`')
+    parser.add_argument("--json-import",
+                        metavar='PATH',
+                        type=str,
+                        help="json dump to import")
+    parser.add_argument("--json-export",
+                        metavar='PATH',
+                        type=str,
+                        help="json dump to export")
+    parser.add_argument('--cmd-path',
+                        metavar='PATH',
+                        help='''The alternative path to the `ibnetdiscover`
+                        program''')
+    parser.add_argument('--cmd-args', metavar='ARGS',
+                        help="""Additional arguments to be passed to the \
+                        `ibnetdiscover` program \
+                        (needs to be quoted)""")
+    parser.add_argument('--no-header', default=False, action='store_true',
+                        help="""Disable header lines for lists""")
+
+
+    if len(sys.argv) == 1:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+
+    args = parser.parse_args()
+
+    main()
