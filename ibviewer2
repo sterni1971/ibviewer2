@@ -3,7 +3,7 @@
 """
 Script to convert ibnetdiscover output to json file
 parts from https://github.com/kostty/ibtopo/blob/master/ibtopology
-script to view the desy maxwell fabric json dump
+script to explore an infiniband fabric
 """
 
 import sys
