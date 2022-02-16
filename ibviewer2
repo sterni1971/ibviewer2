@@ -2,8 +2,8 @@
 
 """
 Script to convert ibnetdiscover output to json file
+and to explore an infiniband fabric
 parts from https://github.com/kostty/ibtopo/blob/master/ibtopology
-script to explore an infiniband fabric
 """
 
 import sys
@@ -294,6 +294,8 @@ def parse_ibnet_output(topo_file):
             elif guid.startswith('S-'):
                 if guid in switch['switches']:
                     switch['switches'][guid]['links'] += 1
+                    if switch['switches'][guid]['connect'] != connect:
+                        switch['switches'][guid]['connect'] = "VARIOUS"
                 else:
                     switch['switches'][guid] = {'links': 1}
                     switch['switches'][guid]['connect'] = connect
@@ -308,11 +310,11 @@ def json_dump(fabric_data, output_file):
 
     if output_file:
         with open(output_file, 'w') as outfile:
-            json.dump(fabric_data, outfile, indent=4)
+            json.dump(fabric_data, outfile, indent=4, sort_keys=True)
             outfile.write('\n')
 
     else:
-        json.dump(fabric_data, sys.stdout, indent=4)
+        json.dump(fabric_data, sys.stdout, indent=4, sort_keys=True)
         print()
 
 
